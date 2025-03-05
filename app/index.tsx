@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from "react";
-import { View, Text, StyleSheet, Button, Alert } from "react-native";
+import { View, Text, StyleSheet, Button, Alert, Platform } from "react-native";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { Pedometer } from "expo-sensors";
 
@@ -21,23 +21,62 @@ export default function StepCounter() {
         const storedSteps = await AsyncStorage.getItem("stepHistory");
         if (storedSteps) {
           setStepHistory(JSON.parse(storedSteps));
+          // If on Android, set the current day's steps from history
+          if (Platform.OS === 'android') {
+            const today = new Date().toISOString().split('T')[0];
+            const todayEntry = JSON.parse(storedSteps).find((entry: StepEntry) => entry.date === today);
+            if (todayEntry) {
+              setStepCount(todayEntry.steps);
+            }
+          }
         }
       } catch (error) {
         console.log("Error loading step history", error);
       }
     };
 
+    const startPedometerTracking = async () => {
+      try {
+        const isAvailable = await Pedometer.isAvailableAsync();
+        setIsPedometerAvailable(isAvailable);
+
+        if (isAvailable) {
+          if (Platform.OS === 'ios') {
+            // iOS-specific code for getting initial steps
+            const end = new Date();
+            const start = new Date();
+            start.setHours(0, 0, 0, 0);
+
+            const result = await Pedometer.getStepCountAsync(start, end);
+            if (result) {
+              setStepCount(result.steps);
+              saveSteps(result.steps);
+            }
+          }
+
+          // Start watching new steps - works on both platforms
+          subscription = Pedometer.watchStepCount((result) => {
+            if (Platform.OS === 'ios') {
+              setStepCount(result.steps);
+              saveSteps(result.steps);
+            } else {
+              // For Android, we increment the steps
+              setStepCount((prevSteps) => {
+                const newSteps = prevSteps + 1;
+                saveSteps(newSteps);
+                return newSteps;
+              });
+            }
+          });
+        }
+      } catch (error) {
+        console.log("Error setting up pedometer", error);
+        setIsPedometerAvailable(false);
+      }
+    };
+
     loadStepHistory();
-
-    Pedometer.isAvailableAsync().then(
-      (result) => setIsPedometerAvailable(result),
-      (error) => console.log("Pedometer not available", error)
-    );
-
-    subscription = Pedometer.watchStepCount((result) => {
-      setStepCount(result.steps);
-      saveSteps(result.steps);
-    });
+    startPedometerTracking();
 
     return () => {
       if (subscription) {
